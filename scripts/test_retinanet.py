@@ -5,6 +5,7 @@ from mmdet.utils import register_all_modules
 import cv2
 import urllib.request
 import sys
+from tqdm import tqdm
 
 def download_lfw():
     """下载 LFW 数据集"""
@@ -68,8 +69,9 @@ except Exception as e:
 CONFIG_FILE = '../configs/rtmdet/rtmdet-ins_l_8xb32-300e_coco.py'
 CHECKPOINT_FILE = '../checkpoints/rtmdet-ins_l_8xb32-300e_coco_20221124_103237-78d1d652.pth'
 
-# 输入和输出路径
-INPUT_DIR = '../test_images/lfw/'
+# 修改输入和输出路径
+ORIGINAL_INPUT_DIR = '../test_images/lfw/'
+AUGMENTED_INPUT_DIR = '../test_images_augmented/'
 OUTPUT_DIR = '../results/'
 
 # 注册所有模块
@@ -104,60 +106,83 @@ COLORS = {
     'face': (255, 0, 0)     # 红色表示脸
 }
 
-# 遍历所有子文件夹
-for root, _, files in os.walk(INPUT_DIR):
-    for file in files:
-        if os.path.splitext(file)[1].lower() in {'.jpg', '.png', '.jpeg'}:
-            img_path = os.path.join(root, file)
-            
-            # 推理
-            result = inference_detector(model, img_path)
-            
-            # 读取图片
-            img = cv2.imread(img_path)
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            
-            # 获取检测结果
-            bboxes = result.pred_instances.bboxes.cpu().numpy()
-            scores = result.pred_instances.scores.cpu().numpy()
-            labels = result.pred_instances.labels.cpu().numpy()
-            
-            # 过滤低置信度结果
-            high_conf_indices = scores >= CONF_THRESH
-            bboxes = bboxes[high_conf_indices]
-            scores = scores[high_conf_indices]
-            labels = labels[high_conf_indices]
-            
-            # 按置信度排序并限制检测数量
-            sort_indices = scores.argsort()[::-1][:MAX_DETECTIONS]
-            bboxes = bboxes[sort_indices]
-            scores = scores[sort_indices]
-            labels = labels[sort_indices]
-            
-            # 增强的可视化效果
-            for bbox, score, label in zip(bboxes, scores, labels):
-                x1, y1, x2, y2 = bbox.astype(int)
-                class_name = model.dataset_meta['classes'][label]
-                
-                # 使用不同颜色区分不同类别
-                color = COLORS.get(class_name.lower(), (255, 0, 0))
-                
-                # 绘制检测框
-                cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
-                
-                # 改进的标签显示
-                label_text = f"{class_name}: {score:.2f}"
-                text_size = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
-                text_width, text_height = text_size
-                
-                # 标签背景
-                cv2.rectangle(img, (x1, y1 - text_height - 4), 
-                            (x1 + text_width + 2, y1), color, -1)
-                # 标签文本
-                cv2.putText(img, label_text, (x1 + 1, y1 - 4), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            
-            # 保存结果
-            output_path = os.path.join(OUTPUT_DIR, file)
-            cv2.imwrite(output_path, cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-            print(f"已检测到 {len(bboxes)} 个目标在 {file} 中")
+def process_image(img_path, output_subdir):
+    """处理单张图片的函数"""
+    # 推理
+    result = inference_detector(model, img_path)
+    
+    # 读取图片
+    img = cv2.imread(img_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    
+    # 获取检测结果
+    bboxes = result.pred_instances.bboxes.cpu().numpy()
+    scores = result.pred_instances.scores.cpu().numpy()
+    labels = result.pred_instances.labels.cpu().numpy()
+    
+    # 过滤低置信度结果
+    high_conf_indices = scores >= CONF_THRESH
+    bboxes = bboxes[high_conf_indices]
+    scores = scores[high_conf_indices]
+    labels = labels[high_conf_indices]
+    
+    # 按置信度排序并限制检测数量
+    sort_indices = scores.argsort()[::-1][:MAX_DETECTIONS]
+    bboxes = bboxes[sort_indices]
+    scores = scores[sort_indices]
+    labels = labels[sort_indices]
+    
+    # 增强的可视化效果
+    for bbox, score, label in zip(bboxes, scores, labels):
+        x1, y1, x2, y2 = bbox.astype(int)
+        class_name = model.dataset_meta['classes'][label]
+        color = COLORS.get(class_name.lower(), (255, 0, 0))
+        cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+        
+        label_text = f"{class_name}: {score:.2f}"
+        text_size = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+        text_width, text_height = text_size
+        
+        cv2.rectangle(img, (x1, y1 - text_height - 4), 
+                    (x1 + text_width + 2, y1), color, -1)
+        cv2.putText(img, label_text, (x1 + 1, y1 - 4), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    
+    # 保存结果
+    os.makedirs(output_subdir, exist_ok=True)
+    output_path = os.path.join(output_subdir, os.path.basename(img_path))
+    cv2.imwrite(output_path, cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+
+def process_directory(input_dir):
+    """处理目录中的所有图片"""
+    # 获取总文件数
+    total_files = sum(1 for root, _, files in os.walk(input_dir) 
+                     for f in files if f.lower().endswith(('.jpg', '.png', '.jpeg')))
+    
+    # 使用 tqdm 创建进度条
+    with tqdm(total=total_files, desc=f"处理 {os.path.basename(input_dir)} 中的图片") as pbar:
+        for root, _, files in os.walk(input_dir):
+            for file in files:
+                if os.path.splitext(file)[1].lower() in {'.jpg', '.png', '.jpeg'}:
+                    # 获取人名
+                    person_name = os.path.basename(os.path.dirname(os.path.join(root, file)))
+                    output_subdir = os.path.join(OUTPUT_DIR, person_name)
+                    
+                    img_path = os.path.join(root, file)
+                    process_image(img_path, output_subdir)
+                    pbar.update(1)
+
+def main():
+    # 创建输出目录
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    
+    print("\n开始处理图像...")
+    
+    # 处理原始图像和增强后的图像
+    for input_dir in [ORIGINAL_INPUT_DIR, AUGMENTED_INPUT_DIR]:
+        process_directory(input_dir)
+    
+    print(f"\n所有图像处理完成。结果保存在: {OUTPUT_DIR}")
+
+if __name__ == "__main__":
+    main()

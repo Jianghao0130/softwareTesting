@@ -170,8 +170,8 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-checkpoints/**
-test_images/**
+checkpoints
+test_images
 lfw.tgz
 results
 test_images_augmented

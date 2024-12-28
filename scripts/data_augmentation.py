@@ -2,6 +2,54 @@ from PIL import Image, ImageEnhance
 import os
 import sys
 import shutil
+import urllib.request
+import tarfile
+from tqdm import tqdm
+
+def download_lfw():
+    """下载 LFW 数据集"""
+    LFW_URL = 'https://vis-www.cs.umass.edu/lfw/lfw.tgz'
+    LFW_TGZ = '../lfw.tgz'
+
+    if not os.path.exists(LFW_TGZ):
+        print(f"正在下载 LFW 数据集到 {LFW_TGZ}...")
+        try:
+            # 使用 tqdm 显示下载进度
+            response = urllib.request.urlopen(LFW_URL)
+            total_size = int(response.headers['Content-Length'])
+            
+            with tqdm(total=total_size, unit='B', unit_scale=True, desc="下载进度") as pbar:
+                urllib.request.urlretrieve(
+                    LFW_URL, 
+                    LFW_TGZ,
+                    lambda count, block_size, total_size: pbar.update(block_size)
+                )
+            print("\n数据集下载完成！")
+        except Exception as e:
+            print(f"\n下载失败: {e}")
+            print(f"请手动从 {LFW_URL} 下载数据集并放置到 {LFW_TGZ}")
+            sys.exit(1)
+    else:
+        print(f"发现已存在的数据集文件: {LFW_TGZ}")
+
+
+# 在开始时检查并下载数据
+download_lfw()
+
+# 解压函数
+def extract_tgz(file_path, dest_path):
+    if not os.path.exists(dest_path):
+        os.makedirs(dest_path)
+    with tarfile.open(file_path, 'r:gz') as tar:
+        tar.extractall(path=dest_path)
+    print(f"已解压 {file_path} 到 {dest_path}")
+
+# 解压 LFW 数据集
+LFW_TGZ = '../lfw.tgz'
+LFW_DEST = '../test_images/'
+
+if not os.path.exists(LFW_DEST):
+    extract_tgz(LFW_TGZ, LFW_DEST)
 
 # 测试图片路径
 TEST_IMAGE_FOLDER = '../test_images/lfw'  # 修改为正确的 LFW 子文件夹路径
@@ -68,35 +116,38 @@ def augment_images():
     success_count = 0
     error_count = 0
     
-    # 递归遍历所有子文件夹
-    for root, _, files in os.walk(TEST_IMAGE_FOLDER):
-        for img_file in files:
-            if img_file.lower().endswith(('.png', '.jpg', '.jpeg')):
-                img_path = os.path.join(root, img_file)
-                
-                # 在输出目录中创建相同的目录结构
-                rel_path = os.path.relpath(root, TEST_IMAGE_FOLDER)
-                output_dir = os.path.join(AUGMENTED_IMAGE_FOLDER, rel_path)
-                os.makedirs(output_dir, exist_ok=True)
-                
-                try:
-                    # 光线变化
-                    augmented_image = simulate_lighting(img_path)
-                    if augmented_image:
-                        augmented_image.save(os.path.join(output_dir, f'bright_{img_file}'))
+    # 获取总文件数
+    total_files = sum(1 for root, _, files in os.walk(TEST_IMAGE_FOLDER) 
+                     for f in files if f.lower().endswith(('.png', '.jpg', '.jpeg')))
+    
+    # 使用 tqdm 创建进度条
+    with tqdm(total=total_files, desc="处理图片") as pbar:
+        for root, _, files in os.walk(TEST_IMAGE_FOLDER):
+            for img_file in files:
+                if img_file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    img_path = os.path.join(root, img_file)
                     
-                    # 遮挡
-                    occluded_image = simulate_occlusion(img_path)
-                    if occluded_image:
-                        occluded_image.save(os.path.join(output_dir, f'occluded_{img_file}'))
+                    rel_path = os.path.relpath(root, TEST_IMAGE_FOLDER)
+                    output_dir = os.path.join(AUGMENTED_IMAGE_FOLDER, rel_path)
+                    os.makedirs(output_dir, exist_ok=True)
                     
-                    success_count += 1
-                    if success_count % 100 == 0:  # 每处理100张图片显示一次进度
-                        print(f"已成功处理 {success_count} 张图片")
+                    try:
+                        # 光线变化
+                        augmented_image = simulate_lighting(img_path)
+                        if augmented_image:
+                            augmented_image.save(os.path.join(output_dir, f'bright_{img_file}'))
                         
-                except Exception as e:
-                    print(f"处理图片 {img_path} 时出错: {e}")
-                    error_count += 1
+                        # 遮挡
+                        occluded_image = simulate_occlusion(img_path)
+                        if occluded_image:
+                            occluded_image.save(os.path.join(output_dir, f'occluded_{img_file}'))
+                        
+                        success_count += 1
+                    except Exception as e:
+                        print(f"\n处理图片 {img_path} 时出错: {e}")
+                        error_count += 1
+                    
+                    pbar.update(1)
 
     print(f"\n数据增强完成:")
     print(f"成功处理: {success_count} 张图片")
