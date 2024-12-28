@@ -2,8 +2,8 @@ from PIL import Image, ImageEnhance
 import os
 
 # 测试图片路径
-TEST_IMAGE_FOLDER = 'test_images/'
-AUGMENTED_IMAGE_FOLDER = 'test_images_augmented/'
+TEST_IMAGE_FOLDER = '../test_images/'
+AUGMENTED_IMAGE_FOLDER = '../test_images_augmented/'
 
 # 模拟光线变化
 def simulate_lighting(image_path, brightness=1.5):
