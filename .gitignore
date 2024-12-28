@@ -174,3 +174,4 @@ checkpoints/**
 test_images/**
 lfw.tgz
 results
+test_images_augmented
