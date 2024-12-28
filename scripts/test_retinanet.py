@@ -11,7 +11,7 @@ def extract_tgz(file_path, dest_path):
 
 # 解压 LFW 数据集
 LFW_TGZ = '../lfw.tgz'  # 压缩包路径
-LFW_DEST = '../test_images/lfw/'  # 解压目标路径
+LFW_DEST = '../test_images/'  # 解压目标路径
 
 if not os.path.exists(LFW_DEST):  # 如果未解压，则解压
     extract_tgz(LFW_TGZ, LFW_DEST)
@@ -26,7 +26,7 @@ CONFIG_FILE = '../configs/retinanet/retinanet_r50_fpn_1x_coco.py'
 CHECKPOINT_FILE = '../checkpoints/retinanet_r50_fpn_coco.pth'
 
 # 输入和输出路径
-INPUT_DIR = '../test_images/lfw/lfw'
+INPUT_DIR = '../test_images/lfw'
 OUTPUT_DIR = '../results/'
 
 # 创建结果保存目录
