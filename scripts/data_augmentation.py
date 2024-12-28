@@ -8,6 +8,9 @@ from tqdm import tqdm
 import numpy as np
 from datetime import datetime
 import json
+import multiprocessing
+from functools import partial
+from itertools import repeat
 
 def download_lfw():
     """下载 LFW 数据集"""
@@ -146,12 +149,48 @@ def apply_all_augmentations(image_path):
     }
     return augmentations
 
+def process_single_image(args):
+    """处理单张图片的所有增强"""
+    img_path, person_name, output_dir = args
+    try:
+        # 创建输出目录
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 应用所有增强方法
+        augmented_images = apply_all_augmentations(img_path)
+        results = {
+            'person_name': person_name,
+            'original_count': 1,
+            'augmented_count': 0,
+            'success': True,
+            'error': None
+        }
+        
+        # 保存增强后的图片
+        for aug_type, aug_image in augmented_images.items():
+            if aug_image:
+                output_path = os.path.join(output_dir, f'{aug_type}_{os.path.basename(img_path)}')
+                aug_image.save(output_path)
+                results['augmented_count'] += 1
+                
+        return results
+        
+    except Exception as e:
+        return {
+            'person_name': person_name,
+            'original_count': 0,
+            'augmented_count': 0,
+            'success': False,
+            'error': str(e)
+        }
+
 def augment_images():
-    """增强图片并记录增强信息"""
+    """使用多进程增强图片"""
     if not check_permissions():
         print("权限检查失败，程序退出")
         sys.exit(1)
 
+    # 初始化增强信息
     augmentation_info = {
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'total_original_images': 0,
@@ -161,46 +200,56 @@ def augment_images():
             'noise_low', 'noise_high', 'blur_low', 'blur_high',
             'rotation_left', 'rotation_right'
         ],
-        'per_person_stats': {}
+        'per_person_stats': {},
+        'errors': []
     }
-    
-    # 获取总文件数
-    total_files = sum(1 for root, _, files in os.walk(TEST_IMAGE_FOLDER) 
-                     for f in files if f.lower().endswith(('.png', '.jpg', '.jpeg')))
-    
-    with tqdm(total=total_files, desc="处理图片") as pbar:
-        for root, _, files in os.walk(TEST_IMAGE_FOLDER):
-            person_name = os.path.basename(root)
-            if person_name not in augmentation_info['per_person_stats']:
-                augmentation_info['per_person_stats'][person_name] = {
-                    'original_count': 0,
-                    'augmented_count': 0
-                }
-            
-            for img_file in files:
-                if img_file.lower().endswith(('.png', '.jpg', '.jpeg')):
-                    img_path = os.path.join(root, img_file)
-                    output_dir = os.path.join(AUGMENTED_IMAGE_FOLDER, person_name)
-                    os.makedirs(output_dir, exist_ok=True)
-                    
-                    try:
-                        # 应用所有增强方法
-                        augmented_images = apply_all_augmentations(img_path)
-                        
-                        # 保存增强后的图片
-                        for aug_type, aug_image in augmented_images.items():
-                            if aug_image:
-                                output_path = os.path.join(output_dir, f'{aug_type}_{img_file}')
-                                aug_image.save(output_path)
-                                augmentation_info['per_person_stats'][person_name]['augmented_count'] += 1
-                        
-                        augmentation_info['per_person_stats'][person_name]['original_count'] += 1
-                        
-                    except Exception as e:
-                        print(f"\n处理图片 {img_path} 时出错: {e}")
-                    
-                    pbar.update(1)
-    
+
+    # 收集所有需要处理的图片
+    image_tasks = []
+    for root, _, files in os.walk(TEST_IMAGE_FOLDER):
+        person_name = os.path.basename(root)
+        for img_file in files:
+            if img_file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                img_path = os.path.join(root, img_file)
+                output_dir = os.path.join(AUGMENTED_IMAGE_FOLDER, person_name)
+                image_tasks.append((img_path, person_name, output_dir))
+
+    # 设置进程池
+    num_processes = max(1, multiprocessing.cpu_count() - 1)  # 保留一个CPU核心
+    print(f"\n使用 {num_processes} 个进程进行并行处理...")
+
+    # 使用进程池处理图片
+    with multiprocessing.Pool(processes=num_processes) as pool:
+        # 使用tqdm显示进度
+        results = list(tqdm(
+            pool.imap(process_single_image, image_tasks),
+            total=len(image_tasks),
+            desc="处理图片"
+        ))
+
+    # 处理结果
+    for result in results:
+        person_name = result['person_name']
+        
+        # 初始化个人统计信息
+        if person_name not in augmentation_info['per_person_stats']:
+            augmentation_info['per_person_stats'][person_name] = {
+                'original_count': 0,
+                'augmented_count': 0,
+                'error_count': 0
+            }
+        
+        # 更新统计信息
+        if result['success']:
+            augmentation_info['per_person_stats'][person_name]['original_count'] += result['original_count']
+            augmentation_info['per_person_stats'][person_name]['augmented_count'] += result['augmented_count']
+        else:
+            augmentation_info['per_person_stats'][person_name]['error_count'] += 1
+            augmentation_info['errors'].append({
+                'person': person_name,
+                'error': result['error']
+            })
+
     # 计算总数
     augmentation_info['total_original_images'] = sum(
         stats['original_count'] for stats in augmentation_info['per_person_stats'].values()
@@ -208,15 +257,26 @@ def augment_images():
     augmentation_info['total_augmented_images'] = sum(
         stats['augmented_count'] for stats in augmentation_info['per_person_stats'].values()
     )
-    
+    augmentation_info['total_errors'] = len(augmentation_info['errors'])
+
     # 保存增强信息
     with open('../augmentation_info.json', 'w') as f:
         json.dump(augmentation_info, f, indent=4)
-    
+
+    # 打印统计信息
     print(f"\n数据增强完成:")
     print(f"原始图片总数: {augmentation_info['total_original_images']}")
     print(f"增强后图片总数: {augmentation_info['total_augmented_images']}")
+    print(f"处理失败数量: {augmentation_info['total_errors']}")
     print(f"增强信息已保存到: augmentation_info.json")
 
+    # 如果有错误，打印错误信息
+    if augmentation_info['errors']:
+        print("\n处理过程中的错误:")
+        for error in augmentation_info['errors']:
+            print(f"- {error['person']}: {error['error']}")
+
 if __name__ == "__main__":
+    # 设置多进程启动方法
+    multiprocessing.set_start_method('spawn', force=True)
     augment_images()
