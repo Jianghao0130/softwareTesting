@@ -171,3 +171,5 @@ cython_debug/
 .pypirc
 
 checkpoints/**
+test_images/**
+lfw.tgz
