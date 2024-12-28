@@ -12,6 +12,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
+import torch
 
 def download_lfw():
     """下载 LFW 数据集"""
@@ -112,6 +113,11 @@ COLORS = {
     'face': (255, 0, 0)     # 红色表示脸
 }
 
+# 测试模式配置
+TEST_MODE = False  # 设置为 True 时只处理少量图片
+TEST_SAMPLES_PER_PERSON = 2  # 每个人处理的图片数量
+TEST_MAX_PERSONS = 3  # 测试时处理的人数
+
 def process_image(img_path, output_subdir):
     """处理单张图片的函数"""
     # 推理
@@ -193,16 +199,27 @@ class TestResults:
     
     def calculate_metrics(self):
         """计算各种评估指标"""
+        # 添加更多评估指标
+        def calculate_confidence_stats(scores):
+            if not scores:
+                return {'min': 0, 'max': 0, 'mean': 0, 'std': 0}
+            return {
+                'min': float(np.min(scores)),
+                'max': float(np.max(scores)),
+                'mean': float(np.mean(scores)),
+                'std': float(np.std(scores))
+            }
+        
         # 计算每个人的指标
         for person in set(list(self.results['original_images'].keys()) + 
                          list(self.results['augmented_images'].keys())):
             orig_detections = [
                 result['num_detections']
-                for results in self.results['original_images'].get(person, {}).values()
+                for result in self.results['original_images'].get(person, {}).values()
             ]
             aug_detections = [
                 result['num_detections']
-                for results in self.results['augmented_images'].get(person, {}).values()
+                for result in self.results['augmented_images'].get(person, {}).values()
             ]
             
             self.results['metrics']['per_person'][person] = {
@@ -217,22 +234,25 @@ class TestResults:
                     'blur_low', 'blur_high', 'rotate_left', 'rotate_right']
         
         for aug_type in aug_types:
-            aug_results = [
-                result
-                for person_results in self.results['augmented_images'].values()
-                for img_name, result in person_results.items()
-                if aug_type in img_name
-            ]
+            aug_results = []
+            for person_results in self.results['augmented_images'].values():
+                for img_name, result in person_results.items():
+                    if aug_type in img_name:
+                        aug_results.append(result)
             
             if aug_results:
                 self.results['metrics']['per_augmentation'][aug_type] = {
                     'avg_detections': np.mean([r['num_detections'] for r in aug_results]),
-                    'avg_confidence': np.mean([np.mean(r['confidence_scores']) for r in aug_results]),
+                    'avg_confidence': np.mean([np.mean(r['confidence_scores']) for r in aug_results])
                 }
         
         # 计算总体指标
-        all_orig = [r for p in self.results['original_images'].values() for r in p.values()]
-        all_aug = [r for p in self.results['augmented_images'].values() for r in p.values()]
+        all_orig = []
+        all_aug = []
+        for person_results in self.results['original_images'].values():
+            all_orig.extend(person_results.values())
+        for person_results in self.results['augmented_images'].values():
+            all_aug.extend(person_results.values())
         
         self.results['metrics']['overall'] = {
             'total_original_images': len(all_orig),
@@ -243,38 +263,61 @@ class TestResults:
                                 np.mean([r['num_detections'] for r in all_orig])
                                 if all_orig else 0)
         }
+        
+        # 添加每个类别的检测统计
+        class_stats = {}
+        for result_dict in [self.results['original_images'], self.results['augmented_images']]:
+            for person_results in result_dict.values():
+                for result in person_results.values():
+                    for label in result['labels']:
+                        class_name = model.dataset_meta['classes'][label]
+                        if class_name not in class_stats:
+                            class_stats[class_name] = {'count': 0, 'confidence_scores': []}
+                        class_stats[class_name]['count'] += 1
+                        class_stats[class_name]['confidence_scores'].extend(result['confidence_scores'])
+        
+        self.results['metrics']['per_class'] = {
+            class_name: {
+                'detection_count': stats['count'],
+                'confidence_stats': calculate_confidence_stats(stats['confidence_scores'])
+            }
+            for class_name, stats in class_stats.items()
+        }
     
     def generate_visualizations(self, output_dir):
         """生成可视化图表"""
-        os.makedirs(output_dir, exist_ok=True)
+        plt.style.use('seaborn')
         
-        # 1. 每个人的检测稳定性柱状图
-        plt.figure(figsize=(15, 6))
-        stability_data = [(person, metrics['detection_stability'])
-                         for person, metrics in self.results['metrics']['per_person'].items()]
-        stability_df = pd.DataFrame(stability_data, columns=['Person', 'Stability'])
-        sns.barplot(data=stability_df, x='Person', y='Stability')
+        # 添加类别检测分布图
+        plt.figure(figsize=(15, 8))
+        class_data = [(class_name, metrics['detection_count'])
+                      for class_name, metrics in self.results['metrics']['per_class'].items()]
+        class_df = pd.DataFrame(class_data, columns=['Class', 'Count'])
+        class_df = class_df.sort_values('Count', ascending=False).head(10)  # 只显示前10个最常见的类别
+        sns.barplot(data=class_df, x='Class', y='Count')
         plt.xticks(rotation=45)
-        plt.title('Detection Stability by Person')
+        plt.title('Top 10 Most Detected Classes')
         plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, 'stability_by_person.png'))
+        plt.savefig(os.path.join(output_dir, 'top_classes.png'))
         plt.close()
         
-        # 2. 不同增强方法的平均置信度对比
+        # 添加置信度分布图
         plt.figure(figsize=(12, 6))
-        conf_data = [(aug_type, metrics['avg_confidence'])
-                    for aug_type, metrics in self.results['metrics']['per_augmentation'].items()]
-        conf_df = pd.DataFrame(conf_data, columns=['Augmentation', 'Confidence'])
-        sns.barplot(data=conf_df, x='Augmentation', y='Confidence')
-        plt.xticks(rotation=45)
-        plt.title('Average Confidence by Augmentation Type')
-        plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, 'confidence_by_augmentation.png'))
+        all_confidences = []
+        for result_dict in [self.results['original_images'], self.results['augmented_images']]:
+            for person_results in result_dict.values():
+                for result in person_results.values():
+                    all_confidences.extend(result['confidence_scores'])
+        sns.histplot(all_confidences, bins=50)
+        plt.title('Distribution of Confidence Scores')
+        plt.xlabel('Confidence Score')
+        plt.ylabel('Count')
+        plt.savefig(os.path.join(output_dir, 'confidence_distribution.png'))
         plt.close()
     
     def generate_report(self, output_path):
         """生成测试报告"""
-        with open(output_path, 'w') as f:
+        with open(output_path, 'w', encoding='utf-8') as f:
             f.write("# AI 模型测试报告\n\n")
             
             # 基本信息
@@ -304,32 +347,77 @@ class TestResults:
                 f.write(f"- 原始图片平均检测数：{metrics['avg_original_detections']:.2f}\n")
                 f.write(f"- 增强图片平均检测数：{metrics['avg_augmented_detections']:.2f}\n")
                 f.write(f"- 检测稳定性：{metrics['detection_stability']:.2f}\n\n")
+            
+            # 添加类别分析
+            f.write("## 类别检测分析\n")
+            top_classes = sorted(
+                self.results['metrics']['per_class'].items(),
+                key=lambda x: x[1]['detection_count'],
+                reverse=True
+            )[:10]
+            
+            f.write("### 前10个最常检测到的类别\n")
+            for class_name, metrics in top_classes:
+                conf_stats = metrics['confidence_stats']
+                f.write(f"#### {class_name}\n")
+                f.write(f"- 检测次数：{metrics['detection_count']}\n")
+                f.write(f"- 置信度范围：{conf_stats['min']:.2f} - {conf_stats['max']:.2f}\n")
+                f.write(f"- 平均置信度：{conf_stats['mean']:.2f} ± {conf_stats['std']:.2f}\n\n")
+            
+            # 添加测试环境信息
+            f.write("## 测试环境信息\n")
+            f.write(f"- 模型：RTMDet\n")
+            f.write(f"- 设备：{torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}\n")
+            f.write(f"- 置信度阈值：{CONF_THRESH}\n")
+            f.write(f"- 最大检测数量：{MAX_DETECTIONS}\n\n")
     
     def save_results(self, output_path):
         """保存原始结果数据"""
-        with open(output_path, 'w') as f:
-            json.dump(self.results, f, indent=4)
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(self.results, f, indent=4, ensure_ascii=False)
 
 def process_directory(input_dir, test_results, is_augmented=False):
     """处理目录中的所有图片"""
-    total_files = sum(1 for root, _, files in os.walk(input_dir) 
-                     for f in files if f.lower().endswith(('.jpg', '.png', '.jpeg')))
+    # 收集所有图片路径
+    all_images = []
+    person_count = 0
+    
+    for root, _, files in os.walk(input_dir):
+        if TEST_MODE and person_count >= TEST_MAX_PERSONS:
+            break
+            
+        image_files = [f for f in files if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
+        if not image_files:
+            continue
+            
+        # 在测试模式下限制每个人的图片数量
+        if TEST_MODE:
+            image_files = image_files[:TEST_SAMPLES_PER_PERSON]
+            person_count += 1
+            
+        for file in image_files:
+            all_images.append((root, file))
+    
+    total_files = len(all_images)
     
     with tqdm(total=total_files, desc=f"处理 {os.path.basename(input_dir)} 中的图片") as pbar:
-        for root, _, files in os.walk(input_dir):
-            for file in files:
-                if os.path.splitext(file)[1].lower() in {'.jpg', '.png', '.jpeg'}:
-                    img_path = os.path.join(root, file)
-                    person_name = os.path.basename(os.path.dirname(img_path))
-                    output_subdir = os.path.join(OUTPUT_DIR, person_name)
-                    
-                    # 处理图片并保存结果
-                    result = process_image(img_path, output_subdir)
-                    test_results.add_result(img_path, result, is_augmented)
-                    
-                    pbar.update(1)
+        for root, file in all_images:
+            img_path = os.path.join(root, file)
+            person_name = os.path.basename(os.path.dirname(img_path))
+            output_subdir = os.path.join(OUTPUT_DIR, person_name)
+            
+            # 处理图片并保存结果
+            result = process_image(img_path, output_subdir)
+            test_results.add_result(img_path, result, is_augmented)
+            
+            pbar.update(1)
 
 def main():
+    if TEST_MODE:
+        print(f"\n运行测试模式:")
+        print(f"- 处理 {TEST_MAX_PERSONS} 个人的图片")
+        print(f"- 每人处理 {TEST_SAMPLES_PER_PERSON} 张图片")
+    
     # 创建输出目录
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
