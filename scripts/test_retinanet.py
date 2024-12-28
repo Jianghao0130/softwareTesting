@@ -3,7 +3,34 @@ import os
 from mmdet.apis import init_detector, inference_detector
 from mmdet.utils import register_all_modules
 import cv2
-from mim import download
+import urllib.request
+import sys
+
+def download_lfw():
+    """下载 LFW 数据集"""
+    LFW_URL = 'https://vis-www.cs.umass.edu/lfw/lfw.tgz'
+    LFW_TGZ = '../lfw.tgz'
+    
+    if not os.path.exists(LFW_TGZ):
+        print(f"正在下载 LFW 数据集到 {LFW_TGZ}...")
+        try:
+            # 显示下载进度
+            def progress(count, block_size, total_size):
+                percent = int(count * block_size * 100 / total_size)
+                sys.stdout.write(f"\r下载进度: {percent}%")
+                sys.stdout.flush()
+            
+            urllib.request.urlretrieve(LFW_URL, LFW_TGZ, progress)
+            print("\n数据集下载完成！")
+        except Exception as e:
+            print(f"\n下载失败: {e}")
+            print(f"请手动从 {LFW_URL} 下载数据集并放置到 {LFW_TGZ}")
+            sys.exit(1)
+    else:
+        print(f"发现已存在的数据集文件: {LFW_TGZ}")
+
+# 在开始时检查并下载数据
+download_lfw()
 
 # 解压函数
 def extract_tgz(file_path, dest_path):
@@ -11,7 +38,7 @@ def extract_tgz(file_path, dest_path):
         os.makedirs(dest_path)
     with tarfile.open(file_path, 'r:gz') as tar:
         tar.extractall(path=dest_path)
-    print(f"Extracted {file_path} to {dest_path}")
+    print(f"已解压 {file_path} 到 {dest_path}")
 
 # 解压 LFW 数据集
 LFW_TGZ = '../lfw.tgz'
@@ -37,7 +64,7 @@ except Exception as e:
     print('请手动下载模型文件并放置到 ../checkpoints/ 目录下')
 
 
-# 更新配置文件路径为 RTMDet-Ins 模型
+# 配置文件路径为 RTMDet-Ins 模型
 CONFIG_FILE = '../configs/rtmdet/rtmdet-ins_l_8xb32-300e_coco.py'
 CHECKPOINT_FILE = '../checkpoints/rtmdet-ins_l_8xb32-300e_coco_20221124_103237-78d1d652.pth'
 
