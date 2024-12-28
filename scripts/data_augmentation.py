@@ -1,10 +1,13 @@
-from PIL import Image, ImageEnhance
+from PIL import Image, ImageEnhance, ImageFilter
 import os
 import sys
 import shutil
 import urllib.request
 import tarfile
 from tqdm import tqdm
+import numpy as np
+from datetime import datetime
+import json
 
 def download_lfw():
     """下载 LFW 数据集"""
@@ -107,52 +110,113 @@ def simulate_occlusion(image_path):
         print(f"处理图片 {image_path} 时出错: {e}")
         return None
 
-# 扩增所有图片
+# 添加高斯噪声
+def simulate_noise(image_path, noise_factor=0.1):
+    """添加高斯噪声"""
+    image = Image.open(image_path)
+    img_array = np.array(image)
+    noise = np.random.normal(0, noise_factor, img_array.shape)
+    noisy_img = img_array + noise
+    return Image.fromarray(np.clip(noisy_img, 0, 255).astype(np.uint8))
+
+# 模拟模糊效果
+def simulate_blur(image_path, radius=2):
+    """模拟模糊效果"""
+    image = Image.open(image_path)
+    return image.filter(ImageFilter.GaussianBlur(radius))
+
+# 模拟旋转
+def simulate_rotation(image_path, angle=15):
+    """模拟旋转"""
+    image = Image.open(image_path)
+    return image.rotate(angle)
+
+def apply_all_augmentations(image_path):
+    """对单张图片应用所有增强方法"""
+    augmentations = {
+        'bright': simulate_lighting(image_path, brightness=1.5),
+        'dark': simulate_lighting(image_path, brightness=0.5),
+        'occluded': simulate_occlusion(image_path),
+        'noise_low': simulate_noise(image_path, noise_factor=0.05),
+        'noise_high': simulate_noise(image_path, noise_factor=0.15),
+        'blur_low': simulate_blur(image_path, radius=1),
+        'blur_high': simulate_blur(image_path, radius=3),
+        'rotate_left': simulate_rotation(image_path, angle=-15),
+        'rotate_right': simulate_rotation(image_path, angle=15)
+    }
+    return augmentations
+
 def augment_images():
+    """增强图片并记录增强信息"""
     if not check_permissions():
         print("权限检查失败，程序退出")
         sys.exit(1)
 
-    success_count = 0
-    error_count = 0
+    augmentation_info = {
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'total_original_images': 0,
+        'total_augmented_images': 0,
+        'augmentation_types': [
+            'brightness_increase', 'brightness_decrease', 'occlusion',
+            'noise_low', 'noise_high', 'blur_low', 'blur_high',
+            'rotation_left', 'rotation_right'
+        ],
+        'per_person_stats': {}
+    }
     
     # 获取总文件数
     total_files = sum(1 for root, _, files in os.walk(TEST_IMAGE_FOLDER) 
                      for f in files if f.lower().endswith(('.png', '.jpg', '.jpeg')))
     
-    # 使用 tqdm 创建进度条
     with tqdm(total=total_files, desc="处理图片") as pbar:
         for root, _, files in os.walk(TEST_IMAGE_FOLDER):
+            person_name = os.path.basename(root)
+            if person_name not in augmentation_info['per_person_stats']:
+                augmentation_info['per_person_stats'][person_name] = {
+                    'original_count': 0,
+                    'augmented_count': 0
+                }
+            
             for img_file in files:
                 if img_file.lower().endswith(('.png', '.jpg', '.jpeg')):
                     img_path = os.path.join(root, img_file)
-                    
-                    rel_path = os.path.relpath(root, TEST_IMAGE_FOLDER)
-                    output_dir = os.path.join(AUGMENTED_IMAGE_FOLDER, rel_path)
+                    output_dir = os.path.join(AUGMENTED_IMAGE_FOLDER, person_name)
                     os.makedirs(output_dir, exist_ok=True)
                     
                     try:
-                        # 光线变化
-                        augmented_image = simulate_lighting(img_path)
-                        if augmented_image:
-                            augmented_image.save(os.path.join(output_dir, f'bright_{img_file}'))
+                        # 应用所有增强方法
+                        augmented_images = apply_all_augmentations(img_path)
                         
-                        # 遮挡
-                        occluded_image = simulate_occlusion(img_path)
-                        if occluded_image:
-                            occluded_image.save(os.path.join(output_dir, f'occluded_{img_file}'))
+                        # 保存增强后的图片
+                        for aug_type, aug_image in augmented_images.items():
+                            if aug_image:
+                                output_path = os.path.join(output_dir, f'{aug_type}_{img_file}')
+                                aug_image.save(output_path)
+                                augmentation_info['per_person_stats'][person_name]['augmented_count'] += 1
                         
-                        success_count += 1
+                        augmentation_info['per_person_stats'][person_name]['original_count'] += 1
+                        
                     except Exception as e:
                         print(f"\n处理图片 {img_path} 时出错: {e}")
-                        error_count += 1
                     
                     pbar.update(1)
-
+    
+    # 计算总数
+    augmentation_info['total_original_images'] = sum(
+        stats['original_count'] for stats in augmentation_info['per_person_stats'].values()
+    )
+    augmentation_info['total_augmented_images'] = sum(
+        stats['augmented_count'] for stats in augmentation_info['per_person_stats'].values()
+    )
+    
+    # 保存增强信息
+    with open('../augmentation_info.json', 'w') as f:
+        json.dump(augmentation_info, f, indent=4)
+    
     print(f"\n数据增强完成:")
-    print(f"成功处理: {success_count} 张图片")
-    print(f"处理失败: {error_count} 张图片")
-    print(f"增强后的图片保存在: {AUGMENTED_IMAGE_FOLDER}")
+    print(f"原始图片总数: {augmentation_info['total_original_images']}")
+    print(f"增强后图片总数: {augmentation_info['total_augmented_images']}")
+    print(f"增强信息已保存到: augmentation_info.json")
 
 if __name__ == "__main__":
     augment_images()
