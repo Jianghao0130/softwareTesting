@@ -118,7 +118,7 @@ COLORS = {
 }
 
 # 测试模式配置
-TEST_MODE = True  # 设置为 True 时只处理少量图片
+TEST_MODE = False  # 设置为 True 时只处理少量图片
 TEST_SAMPLES_PER_PERSON = 2  # 每个人处理的图片数量
 TEST_MAX_PERSONS = 3  # 测试时处理的人数
 
