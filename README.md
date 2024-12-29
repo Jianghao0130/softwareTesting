@@ -77,6 +77,7 @@ python scripts/test_RTMDet.py
 
 ### 2.3 测试数据
 - 数据集：LFW (Labeled Faces in the Wild)
+- 数据集来源：https://vis-www.cs.umass.edu/lfw/lfw.tgz
 - 原始图片：13,233 张
 - 干扰处理后的图片：119,097 张（每张原始图片生成9种不同干扰条件的变体）
 - 总样本数：5,749 人
