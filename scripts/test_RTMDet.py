@@ -13,6 +13,10 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import torch
+import warnings
+
+# 忽略 PyTorch 的 meshgrid 警告
+warnings.filterwarnings('ignore', message='torch.meshgrid: in an upcoming release')
 
 def download_lfw():
     """下载 LFW 数据集"""
@@ -114,7 +118,7 @@ COLORS = {
 }
 
 # 测试模式配置
-TEST_MODE = False  # 设置为 True 时只处理少量图片
+TEST_MODE = True  # 设置为 True 时只处理少量图片
 TEST_SAMPLES_PER_PERSON = 2  # 每个人处理的图片数量
 TEST_MAX_PERSONS = 3  # 测试时处理的人数
 
@@ -286,7 +290,12 @@ class TestResults:
     
     def generate_visualizations(self, output_dir):
         """生成可视化图表"""
-        plt.style.use('seaborn')
+        # 确保输出目录存在
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 使用新版本的 seaborn 样式
+        import seaborn as sns
+        sns.set_theme(style="whitegrid")
         
         # 添加类别检测分布图
         plt.figure(figsize=(15, 8))
@@ -294,7 +303,15 @@ class TestResults:
                       for class_name, metrics in self.results['metrics']['per_class'].items()]
         class_df = pd.DataFrame(class_data, columns=['Class', 'Count'])
         class_df = class_df.sort_values('Count', ascending=False).head(10)  # 只显示前10个最常见的类别
-        sns.barplot(data=class_df, x='Class', y='Count')
+        # 更新 seaborn 绘图方式
+        sns.barplot(
+            data=class_df,
+            x='Class',
+            y='Count',
+            hue='Class',  # 使用 Class 作为颜色区分
+            palette='husl',
+            legend=False  # 不显示图例
+        )
         plt.xticks(rotation=45)
         plt.title('Top 10 Most Detected Classes')
         plt.tight_layout()
@@ -308,7 +325,7 @@ class TestResults:
             for person_results in result_dict.values():
                 for result in person_results.values():
                     all_confidences.extend(result['confidence_scores'])
-        sns.histplot(all_confidences, bins=50)
+        sns.histplot(all_confidences, bins=50, color='skyblue', edgecolor='black')
         plt.title('Distribution of Confidence Scores')
         plt.xlabel('Confidence Score')
         plt.ylabel('Count')
@@ -340,13 +357,54 @@ class TestResults:
                 f.write(f"- 平均检测数：{metrics['avg_detections']:.2f}\n")
                 f.write(f"- 平均置信度：{metrics['avg_confidence']:.2f}\n\n")
             
-            # 各个人的性能
-            f.write("## 个人检测性能\n")
-            for person, metrics in self.results['metrics']['per_person'].items():
-                f.write(f"### {person}\n")
-                f.write(f"- 原始图片平均检测数：{metrics['avg_original_detections']:.2f}\n")
-                f.write(f"- 增强图片平均检测数：{metrics['avg_augmented_detections']:.2f}\n")
-                f.write(f"- 检测稳定性：{metrics['detection_stability']:.2f}\n\n")
+            # 优化个人检测性能部分
+            f.write("## 个人检测性能统计\n")
+            # 计算统计数据
+            all_stabilities = [m['detection_stability'] for m in self.results['metrics']['per_person'].values()]
+            all_orig_detections = [m['avg_original_detections'] for m in self.results['metrics']['per_person'].values()]
+            all_aug_detections = [m['avg_augmented_detections'] for m in self.results['metrics']['per_person'].values()]
+            
+            # 计算总体统计
+            f.write("### 总体统计\n")
+            f.write(f"- 总样本数：{len(self.results['metrics']['per_person'])} 人\n")
+            f.write(f"- 平均检测稳定性：{np.mean(all_stabilities):.2f} ± {np.std(all_stabilities):.2f}\n")
+            f.write(f"- 原始图片平均检测数：{np.mean(all_orig_detections):.2f} ± {np.std(all_orig_detections):.2f}\n")
+            f.write(f"- 增强图片平均检测数：{np.mean(all_aug_detections):.2f} ± {np.std(all_aug_detections):.2f}\n\n")
+            
+            # 找出典型案例
+            f.write("### 典型案例分析\n")
+            
+            # 检测稳定性最高的3个人
+            top_stable = sorted(
+                self.results['metrics']['per_person'].items(),
+                key=lambda x: x[1]['detection_stability'],
+                reverse=True
+            )[:3]
+            f.write("#### 检测稳定性最高的案例\n")
+            for person, metrics in top_stable:
+                f.write(f"- {person}：稳定性 {metrics['detection_stability']:.2f}\n")
+            f.write("\n")
+            
+            # 检测稳定性最低的3个人
+            bottom_stable = sorted(
+                self.results['metrics']['per_person'].items(),
+                key=lambda x: x[1]['detection_stability']
+            )[:3]
+            f.write("#### 检测稳定性最低的案例\n")
+            for person, metrics in bottom_stable:
+                f.write(f"- {person}：稳定性 {metrics['detection_stability']:.2f}\n")
+            f.write("\n")
+            
+            # 检测数量最多的3个人
+            top_detections = sorted(
+                self.results['metrics']['per_person'].items(),
+                key=lambda x: x[1]['avg_original_detections'],
+                reverse=True
+            )[:3]
+            f.write("#### 检测数量最多的案例\n")
+            for person, metrics in top_detections:
+                f.write(f"- {person}：原始 {metrics['avg_original_detections']:.1f}，增强后 {metrics['avg_augmented_detections']:.1f}\n")
+            f.write("\n")
             
             # 添加类别分析
             f.write("## 类别检测分析\n")
@@ -400,7 +458,9 @@ def process_directory(input_dir, test_results, is_augmented=False):
     
     total_files = len(all_images)
     
-    with tqdm(total=total_files, desc=f"处理 {os.path.basename(input_dir)} 中的图片") as pbar:
+    # 获取更友好的目录名显示
+    dir_type = "原始图片" if input_dir == ORIGINAL_INPUT_DIR else "增强图片"
+    with tqdm(total=total_files, desc=f"处理{dir_type}", ncols=100) as pbar:
         for root, file in all_images:
             img_path = os.path.join(root, file)
             person_name = os.path.basename(os.path.dirname(img_path))
