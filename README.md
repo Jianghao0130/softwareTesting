@@ -1,5 +1,8 @@
 # RTMDet 目标检测模型测试报告
 
+### 演示视频：https://box.nju.edu.cn/d/3244f5833a38493e8ad7/
+### 数据集：https://vis-www.cs.umass.edu/lfw/lfw.tgz
+
 ## 0. 项目运行步骤
 
 ### 0.1 环境准备
